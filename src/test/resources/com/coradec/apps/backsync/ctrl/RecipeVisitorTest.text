@@ -1,0 +1,5 @@
+# Localized textbase for default locale of class RecipeVisiorTest
+
+CantDestroy2: Can’t destroy the test directory «%s»; an error occurred on subentry «%s»!
+IgnoreUnrecognizableStruct2: Ignoring unrecognizable structure «%s» within ‹%s› ... !
+IgnoreFreakDirectoryName2: Ignoring freak directory name «%s» of type ‹%s› ... !

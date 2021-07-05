@@ -1,0 +1,2 @@
+# Localized text base for default locale of class UpSync
+ProblemsInRecipe1: The following problems have been found while reading the recipe — and the recipe was not stored:\n%s
