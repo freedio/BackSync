@@ -1,0 +1,23 @@
+---
+Root: /
+Exclude:
+  type:
+    - SOCKET
+    - BLOCKDEVICE
+    - CHARDEVICE
+    - PIPE
+    - DOOR
+    - LOST_LINK
+  prefix:
+    - /backup
+    - /dev
+    - /media
+    - /mnt
+    - /proc
+    - /run
+    - /sys
+    - /tmp
+    - /var
+  pattern:
+    - .+\.tmp$
+    - ^\?.*

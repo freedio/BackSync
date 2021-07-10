@@ -1,6 +1,0 @@
----
-Recipe: ~/.coradec/apps/backsync/Recipe.yaml
-BSType: passive
-Target: /mnt/backup
-Exclude:
-  - /backup
