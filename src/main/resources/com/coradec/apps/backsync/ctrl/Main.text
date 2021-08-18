@@ -1,0 +1,5 @@
+# Localized textbase for default locale of class Main
+
+StreamFailed2: Failed to stream «%s», status is %d, but should be 0!
+MissingFunction0: The main function was not specified!
+UnknownFunction1: Function ‹%s› is unknown!

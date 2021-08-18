@@ -1,5 +1,4 @@
 ---
-SingleList: true
 Exclude:
   type:
     - SOCKET
@@ -21,3 +20,5 @@ Exclude:
   pattern:
     - .+\.tmp$
     - ^\?.*
+    - /home/[^/]+/.cache/
+    - /home/[^/]*/.local/share/Trash/

@@ -1,4 +1,7 @@
 ---
+System: Local # Local | Remote
+FileLog: /tmp/backsync-files.log
+Group: Workstation
 Root: /
 Exclude:
   type:
@@ -20,4 +23,5 @@ Exclude:
     - /var
   pattern:
     - .+\.tmp$
-    - ^\?.*
+    - /\?.*
+    - /home/.*/.local/share/Trash/.+
