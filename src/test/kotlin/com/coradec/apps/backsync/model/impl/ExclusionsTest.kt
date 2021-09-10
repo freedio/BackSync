@@ -1,6 +1,5 @@
 package com.coradec.apps.backsync.model.impl
 
-import com.coradec.apps.backsync.model.FileDescriptor
 import com.coradec.coradeck.core.util.FileType
 import com.coradec.coradeck.core.util.FileType.*
 import org.assertj.core.api.Assertions.assertThat
@@ -17,15 +16,16 @@ internal class ExclusionsTest {
     @Test
     fun testNonMatch() {
         // given:
+        val pathToMatch = Paths.get("/etc/passwd")
         val t1 = Exclusions(prefix = listOf("/home"))
         val t2 = Exclusions(type = EnumSet.of(BLOCKDEVICE))
         val t3 = Exclusions(pattern = listOf(Regex(".*\\.tmp")))
         val t4 = Exclusions(prefix = listOf("/home"), pattern = listOf(Regex(".*\\.tmp")))
         // when:
-        val r1 = t1.matches(FileDescriptor.invoke(Paths.get("/etc/passwd"), TestFileAttributes()))
-        val r2 = t2.matches(FileDescriptor.invoke(Paths.get("/etc/passwd"), TestFileAttributes()))
-        val r3 = t3.matches(FileDescriptor.invoke(Paths.get("/etc/passwd"), TestFileAttributes()))
-        val r4 = t4.matches(FileDescriptor.invoke(Paths.get("/etc/passwd"), TestFileAttributes()))
+        val r1 = t1 matches(pathToMatch)
+        val r2 = t2 matches(pathToMatch)
+        val r3 = t3 matches(pathToMatch)
+        val r4 = t4 matches(pathToMatch)
         // then:
         assertThat(r1).isFalse()
         assertThat(r2).isFalse()
@@ -36,15 +36,16 @@ internal class ExclusionsTest {
     @Test
     fun testMatch() {
         // given:
+        val pathToMatch = Paths.get("/home/fred/file.tmp")
         val t1 = Exclusions(prefix = listOf("/home"))
         val t2 = Exclusions(type = EnumSet.of(PIPE))
         val t3 = Exclusions(pattern = listOf(Regex(".*\\.tmp")))
         val t4 = Exclusions(prefix = listOf("/home"), pattern = listOf(Regex(".*\\.tmp")))
         // when:
-        val r1 = t1.matches(FileDescriptor.invoke(Paths.get("/home/fred/file.tmp"), TestFileAttributes(PIPE)))
-        val r2 = t2.matches(FileDescriptor.invoke(Paths.get("/home/fred/file.tmp"), TestFileAttributes(PIPE)))
-        val r3 = t3.matches(FileDescriptor.invoke(Paths.get("/home/fred/file.tmp"), TestFileAttributes(PIPE)))
-        val r4 = t4.matches(FileDescriptor.invoke(Paths.get("/home/fred/file.tmp"), TestFileAttributes(PIPE)))
+        val r1 = t1.matches(pathToMatch)
+        val r2 = t2.matches(pathToMatch)
+        val r3 = t3.matches(pathToMatch)
+        val r4 = t4.matches(pathToMatch)
         // then:
         assertThat(r1).isTrue()
         assertThat(r2).isTrue()

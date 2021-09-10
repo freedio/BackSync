@@ -4,3 +4,5 @@ CreatingGroupdir1: Creating group directory «%s».
 RecipeExists1: Group recipe «%s» already exists: no action taken.
 CreatingRecipe1: Creating group recipe «%s».
 IgnoringFurtherUpsyncRequests: Upsync already crashed: ignoring further Upsync requests!
+IgnoringLostLink1: Discovered lost link «%s»! → Ignoring it.
+LoopLinkDetected1: Loop link «%s» detected! → dropped.

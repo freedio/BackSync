@@ -1,12 +1,12 @@
 package com.coradec.apps.backsync.com
 
-import com.coradec.apps.backsync.model.FileDescriptor
 import com.coradec.coradeck.com.model.impl.BasicRequest
 import com.coradec.coradeck.core.model.Origin
+import java.nio.file.Path
 
 class UpSyncRequest(
     origin: Origin,
     val hostname: String,
     val group: String,
-    val fileDescriptor: FileDescriptor
+    val path: Path
 ) : BasicRequest(origin)

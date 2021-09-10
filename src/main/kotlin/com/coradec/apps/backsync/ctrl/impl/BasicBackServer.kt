@@ -1,48 +1,52 @@
 package com.coradec.apps.backsync.ctrl.impl
 
-import com.coradec.apps.backsync.com.SetupRequest
-import com.coradec.apps.backsync.com.UpSyncDirRequest
-import com.coradec.apps.backsync.com.UpSyncRequest
+import com.coradec.apps.backsync.com.*
 import com.coradec.apps.backsync.ctrl.BackServer
 import com.coradec.apps.backsync.ctrl.FileWriter
-import com.coradec.apps.backsync.model.FileDescriptor
 import com.coradec.apps.backsync.model.Recipe
 import com.coradec.apps.backsync.model.UpsyncType
-import com.coradec.apps.backsync.model.impl.BasicRecipe
 import com.coradec.coradeck.com.model.impl.BasicEvent
 import com.coradec.coradeck.conf.model.LocalProperty
 import com.coradec.coradeck.conf.module.CoraConf
 import com.coradec.coradeck.core.model.Origin
-import com.coradec.coradeck.core.trouble.FatalException
 import com.coradec.coradeck.core.util.here
 import com.coradec.coradeck.core.util.relativeTo
 import com.coradec.coradeck.ctrl.ctrl.impl.BasicAgent
+import com.coradec.coradeck.ctrl.model.AgentPool
 import com.coradec.coradeck.text.model.LocalText
-import com.fasterxml.jackson.databind.exc.InvalidDefinitionException
-import java.io.FileNotFoundException
+import java.io.PrintWriter
 import java.nio.file.Files
+import java.nio.file.NoSuchFileException
 import java.nio.file.Path
+import java.nio.file.Paths
 import java.nio.file.attribute.BasicFileAttributes
-import java.time.LocalDateTime
-import java.time.ZoneId
+import java.util.concurrent.ConcurrentHashMap
+import kotlin.io.path.readAttributes
+import kotlin.system.exitProcess
 
 class BasicBackServer : BasicAgent(), BackServer {
-    private val recipes: MutableMap<String, Recipe> = mutableMapOf()
+    private val log = PrintWriter(Files.newOutputStream(Paths.get("/tmp/BasicBackServer.log")))
+    private val recipes = ConcurrentHashMap<String, Recipe>()
     private val media: Path = PROP_MEDIA.value
     private var upsyncCrashed = false
-    private val fileWriter: FileWriter get() = FileWriter.take()
+    private val writerPool = AgentPool(0, PROP_POOL_SIZE.value) { FileWriter() }
 
     init {
         addRoute(UpSyncRequest::class.java, ::upsync)
         addRoute(UpSyncDirRequest::class.java, ::createDir)
         addRoute(Finish::class.java) { debug("BackServer finished.")}
         addRoute(SetupRequest::class.java, ::setup)
+        addRoute(DownloadRecipeVoucher::class.java, ::downloadRecipe)
     }
 
-    override fun start() {}
-
     override fun close() {
-        inject(Finish(here))
+        inject(Finish(this))
+    }
+
+    private fun downloadRecipe(voucher: DownloadRecipeVoucher) {
+        val recipe = recipes.computeIfAbsent(voucher.group, ::loadGroupRecipe)
+        voucher.value = recipe
+        voucher.succeed()
     }
 
     private fun setup(request: SetupRequest) {
@@ -68,22 +72,20 @@ class BasicBackServer : BasicAgent(), BackServer {
     private fun upsync(request: UpSyncRequest) {
         val hostname = request.hostname
         val group = request.group
-        val fileDescriptor = request.fileDescriptor
-        if (upsyncCrashed) warn(TEXT_IGNORING_FURTHER_UPSYNC_REQUESTS) else {
-            debug("Received UpSyncRequest for group $group and descriptor $fileDescriptor")
+        val path = request.path
+        if (upsyncCrashed) {
+            warn(TEXT_IGNORING_FURTHER_UPSYNC_REQUESTS)
+            exitProcess(1)
+        } else {
+            log.println("input ${request.group}:${request.hostname}:${request.path}")
+            debug("Received UpSyncRequest for group $group and path $path")
             try {
                 trace("Reading group recipe for ‹$group› from ${media.resolve(group).resolve("recipe.yaml")}")
                 val recipe = recipes.computeIfAbsent(group, ::loadGroupRecipe)
-                when (recipe.upsyncType(hostname, group, fileDescriptor)) {
+                when (recipe.upsyncType(hostname, group, path)) {
                     UpsyncType.NONE -> debug("→ skip.")
-                    UpsyncType.BACKUP -> {
-                        debug("→ backup.")
-                        backup(hostname, group, fileDescriptor)
-                    }
-                    UpsyncType.SYNC -> {
-                        debug("→ sync.")
-                        upsync(hostname, group, fileDescriptor)
-                    }
+                    UpsyncType.BACKUP -> backup(hostname, group, path)
+                    UpsyncType.SYNC -> upsync(hostname, group, path)
                 }
                 request.succeed()
             } catch (e: Exception) {
@@ -97,21 +99,22 @@ class BasicBackServer : BasicAgent(), BackServer {
     private fun createDir(request: UpSyncDirRequest) {
         val hostname = request.hostname
         val group = request.group
-        val fileDescriptor = request.fileDescriptor
+        val path = request.path
         if (upsyncCrashed) warn(TEXT_IGNORING_FURTHER_UPSYNC_REQUESTS) else {
-            debug("Received UpSyncRequest for group $group and descriptor $fileDescriptor")
+            log.println("creDir ${request.group}:${request.hostname}:${request.path}")
+            debug("Received UpSyncDirRequest for group $group and path $path")
             try {
                 trace("Reading group recipe for ‹$group› from ${media.resolve(group).resolve("recipe.yaml")}")
                 val recipe = recipes.computeIfAbsent(group, ::loadGroupRecipe)
-                when (recipe.upsyncType(hostname, group, fileDescriptor)) {
+                when (recipe.upsyncType(hostname, group, path)) {
                     UpsyncType.NONE -> debug("→ skip.")
                     UpsyncType.BACKUP -> {
                         debug("→ backup.")
-                        backupDir(hostname, group, fileDescriptor)
+                        backupDir(hostname, group, path)
                     }
                     UpsyncType.SYNC -> {
                         debug("→ sync.")
-                        upsyncDir(hostname, group, fileDescriptor)
+                        upsyncDir(hostname, group, path)
                     }
                 }
                 request.succeed()
@@ -123,30 +126,48 @@ class BasicBackServer : BasicAgent(), BackServer {
         }
     }
 
-    private fun backup(hostname: String, group: String, fileDescriptor: FileDescriptor) {
-        val targetPath = media.resolve(group).resolve(hostname).resolve(fileDescriptor.path.relativeTo("/"))
-        debug("Sending up ${fileDescriptor.path} to $targetPath")
-        fileWriter.use { it.sendTo(fileDescriptor, targetPath) }
+    private fun backup(hostname: String, group: String, path: Path) {
+        log.println("backup $group:$hostname:$path")
+        val targetPath = media.resolve(group).resolve(hostname).resolve(path.relativeTo("/"))
+        try {
+            val targetRealPath = try {
+                val relativeRealPath = path.toRealPath().relativeTo("/")
+                media.resolve(group).resolve(hostname).resolve(relativeRealPath)
+            } catch (e: FileSystemException) {
+                if ("Too many levels of symbolic links or unable to access attributes of symbolic link" in (e.message ?: ""))
+                warn(TEXT_LOOPLINK_DETECTED, path)
+                path
+            }
+            debug("Sending up $path to $targetPath")
+            writerPool.inject(WriteFileRequest(here, path, targetPath, targetRealPath))
+        } catch (e: NoSuchFileException) {
+            error(TEXT_IGNORING_LOST_LINK, targetPath)
+        }
     }
 
-    private fun upsync(hostname: String, group: String, fileDescriptor: FileDescriptor) {
-        val targetPath = media.resolve(group).resolve("shared").resolve(fileDescriptor.path.relativeTo("/"))
-        debug("Synching ${fileDescriptor.path} to $targetPath")
-        val attributes = Files.readAttributes(targetPath, BasicFileAttributes::class.java)
-        if (LocalDateTime.ofInstant(attributes.lastModifiedTime().toInstant(), ZoneId.systemDefault()) < fileDescriptor.changed)
-            fileWriter.use { it.sendTo(fileDescriptor, targetPath) }
+    private fun upsync(hostname: String, group: String, path: Path) {
+        log.println("upsync $group:$hostname:$path")
+        val targetPath = media.resolve(group).resolve("shared").resolve(path.relativeTo("/"))
+        val targetRealPath = media.resolve(group).resolve(hostname).resolve(path.toRealPath().relativeTo("/"))
+        debug("Synching ${path} to $targetPath")
+        val sourceAttributes = path.readAttributes<BasicFileAttributes>()
+        val targetAttributes = targetPath.readAttributes<BasicFileAttributes>()
+        if (targetAttributes.lastModifiedTime() > sourceAttributes.lastModifiedTime())
+            writerPool.inject(WriteFileRequest(here, path, targetPath, targetRealPath))
     }
 
-    private fun backupDir(hostname: String, group: String, fileDescriptor: FileDescriptor) {
-        val targetPath = media.resolve(group).resolve(hostname).resolve(fileDescriptor.path.relativeTo("/"))
+    private fun backupDir(hostname: String, group: String, path: Path) {
+        log.println("bakDir $group:$hostname:$path")
+        val targetPath = media.resolve(group).resolve(hostname).resolve(path.relativeTo("/"))
         if (Files.notExists(targetPath)) {
             debug("Creating backup directory \"%s\"", targetPath)
             debug("Created backup directory \"%s\"", Files.createDirectories(targetPath))
         }
     }
 
-    private fun upsyncDir(hostname: String, group: String, fileDescriptor: FileDescriptor) {
-        val targetPath = media.resolve(group).resolve("shared").resolve(fileDescriptor.path.relativeTo("/"))
+    private fun upsyncDir(hostname: String, group: String, path: Path) {
+        log.println("upsDir $group:$hostname:$path")
+        val targetPath = media.resolve(group).resolve("shared").resolve(path.relativeTo("/"))
         if (Files.notExists(targetPath)) {
             debug("Creating sync directory \"%s\"", targetPath)
             debug("Created sync directory \"%s\"", Files.createDirectories(targetPath))
@@ -159,11 +180,14 @@ class BasicBackServer : BasicAgent(), BackServer {
     class Finish(origin: Origin) : BasicEvent(origin)
 
     companion object {
+        private val PROP_POOL_SIZE = LocalProperty<Int>("PoolSize")
         private val PROP_MEDIA = LocalProperty<Path>("Media")
         private val TEXT_GROUPDIR_EXISTS = LocalText("GroupdirExists1")
         private val TEXT_CREATING_GROUPDIR = LocalText("CreatingGroupdir1")
         private val TEXT_RECIPE_EXISTS = LocalText("RecipeExists1")
         private val TEXT_CREATING_RECIPE = LocalText("CreatingRecipe1")
         private val TEXT_IGNORING_FURTHER_UPSYNC_REQUESTS = LocalText("IgnoringFurtherUpsyncRequests")
+        private val TEXT_IGNORING_LOST_LINK = LocalText("IgnoringLostLink1")
+        private val TEXT_LOOPLINK_DETECTED = LocalText("LoopLinkDetected1")
     }
 }

@@ -29,12 +29,12 @@ fun main(args: Array<String>) {
     Main(function, arglist)
 }
 
-open class Main: BasicAgent() {
+open class Main(qsize: Int = 1024): BasicAgent(qsize) {
     val system: String get() = serverType.value
     val root: Path get() = rootDirectory.value
     val exclusions: Exclusions get() = excludes.value
     val group: String get() = backupGroup.value
-    val filelog get() = PrintWriter(Files.newBufferedWriter(fileLogFile.value))
+    private val filelog get() = PrintWriter(Files.newBufferedWriter(fileLogFile.value))
 
     init {
         atEnd { filelog.close() }

@@ -1,56 +1,70 @@
 package com.coradec.apps.backsync.ctrl.impl
 
+import com.coradec.apps.backsync.com.WriteFileRequest
 import com.coradec.apps.backsync.ctrl.FileWriter
-import com.coradec.apps.backsync.model.FileDescriptor
-import com.coradec.apps.backsync.model.impl.BasicFileAttribute
 import com.coradec.apps.backsync.trouble.InvalidFileTypeException
-import com.coradec.coradeck.core.util.FileType.*
 import com.coradec.coradeck.ctrl.ctrl.impl.BasicAgent
 import com.coradec.coradeck.text.model.LocalText
+import java.io.PrintWriter
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.StandardCopyOption.*
-import java.nio.file.attribute.*
-import java.time.ZoneOffset
-import java.util.concurrent.LinkedBlockingQueue
+import java.nio.file.Paths
+import java.nio.file.StandardCopyOption.COPY_ATTRIBUTES
+import java.nio.file.StandardCopyOption.REPLACE_EXISTING
+import java.nio.file.attribute.BasicFileAttributes
+import java.nio.file.attribute.PosixFileAttributeView
+import java.nio.file.attribute.PosixFileAttributes
+import java.nio.file.attribute.PosixFilePermissions
+import kotlin.io.path.getLastModifiedTime
+import kotlin.io.path.getOwner
+import kotlin.io.path.readAttributes
+import kotlin.io.path.setOwner
 
-class BasicFileWriter(val pool: LinkedBlockingQueue<FileWriter>) : BasicAgent(), FileWriter {
-    override fun sendTo(sourceDescriptor: FileDescriptor, targetPath: Path) {
-        val tpath = targetPath
-        val ftime = FileTime.from(sourceDescriptor.changed.toInstant(ZoneOffset.UTC))
-        val tattr = setOf<FileAttribute<*>>(
-//            BasicFileAttribute("lastModifiedTime", ftime),
-//            BasicFileAttribute("lastAccessTime", ftime),
-//            BasicFileAttribute("creationTime", ftime),
-//            BasicFileAttribute("size", td.size),
-//            BasicFileAttribute("isRegularFile", td.type == REGULAR),
-//            BasicFileAttribute("isDirectory", td.type == DIRECTORY),
-//            BasicFileAttribute("isSymbolicLink", td.type == SYMLINK),
-//            BasicFileAttribute("isOther", td.type !in setOf(REGULAR, DIRECTORY, SYMLINK)),
-//            BasicFileAttribute("owner", td.owner.owner),
-//            BasicFileAttribute("group", td.owner.group),
-            BasicFileAttribute("posix:permissions", sourceDescriptor.mode.permissions),
-        ).toTypedArray()
-        if (!Files.exists(tpath)) {
-            val realPath = when (val type = sourceDescriptor.type) {
-                REGULAR -> Files.copy(sourceDescriptor.path, tpath, REPLACE_EXISTING)
-                DIRECTORY -> Files.createDirectory(tpath, *tattr)
-                SYMLINK -> Files.createSymbolicLink(tpath, tpath.toRealPath(), *tattr)
-                else -> throw InvalidFileTypeException(TEXT_CANNOT_CREATE[type.name])
-            }
-            Files.setLastModifiedTime(realPath, ftime)
-            sourceDescriptor.owner.owner?.let { Files.setOwner(realPath, it) }
-            val posixFile = Files.getFileAttributeView(realPath, PosixFileAttributeView::class.java)
-            if (posixFile != null) {
-                sourceDescriptor.owner.group?.let { posixFile.setGroup(it) }
-                sourceDescriptor.mode.permissions.let { if (it.isNotEmpty()) posixFile.setPermissions(it) }
-                posixFile.setTimes(ftime, ftime, ftime)
-            }
+class BasicFileWriter : BasicAgent(), FileWriter {
+    private val log = PrintWriter(Files.newOutputStream(Paths.get("/tmp/BasicFileWriter.log")))
+    init {
+        addRoute(WriteFileRequest::class, ::writeFile)
+    }
+
+    private fun writeFile(request: WriteFileRequest) {
+        try {
+            debug("FileWriter: got request to write file ${request.targetPath}")
+            sendTo(request.sourcePath, request.targetPath, request.targetRealPath)
+            request.succeed()
+        } catch (e: Exception) {
+            error(e)
+            request.fail(e)
         }
     }
 
-    override fun close() {
-        pool.offer(this)
+    override fun sendTo(sourcePath: Path, targetPath: Path, targetRealPath: Path?) {
+        log.println("$targetPath")
+        val sourceAttr = sourcePath.readAttributes<BasicFileAttributes>()
+        val sourceMode = sourcePath.readAttributes<PosixFileAttributes>()
+        val sourcePerm = sourcePath.readAttributes<PosixFileAttributes>()
+        val ftime = sourcePath.getLastModifiedTime()
+        if (!Files.exists(targetPath)) {
+            val realPath = when  {
+                sourceAttr.isRegularFile -> Files.copy(sourcePath, targetPath, REPLACE_EXISTING, COPY_ATTRIBUTES)
+                sourceAttr.isDirectory -> {
+                    val dirAccessPermissions = PosixFilePermissions.asFileAttribute(sourcePerm.permissions())
+                    Files.createDirectory(targetPath, dirAccessPermissions)
+                }
+                sourceAttr.isSymbolicLink -> {
+                    if (targetRealPath == null) throw IllegalArgumentException("targetRealPath for a SYMLINK must be set!")
+                    Files.createSymbolicLink(targetPath, targetRealPath)
+                }
+                else -> throw InvalidFileTypeException(TEXT_CANNOT_CREATE.content)
+            }
+            Files.setLastModifiedTime(realPath, ftime)
+            sourcePath.getOwner()?.let { targetPath.setOwner(it) }
+            val posixFile = Files.getFileAttributeView(realPath, PosixFileAttributeView::class.java)
+            if (posixFile != null) {
+                posixFile.setGroup(sourceMode.group())
+                posixFile.setPermissions(sourceMode.permissions())
+                posixFile.setTimes(ftime, ftime, ftime)
+            }
+        }
     }
 
     companion object {

@@ -1,14 +1,19 @@
 package com.coradec.apps.backsync.ctrl.impl
 
 import com.coradec.apps.backsync.com.FileDiscoveryEvent
+import com.coradec.apps.backsync.com.StartDiscoveryVoucher
+import com.coradec.apps.backsync.com.impl.FileDiscoveryEntryEvent
+import com.coradec.apps.backsync.model.Recipe
 import com.coradec.apps.backsync.model.impl.Exclusions
 import com.coradec.coradeck.com.model.Information
 import com.coradec.coradeck.com.module.CoraComImpl
 import com.coradec.coradeck.conf.module.CoraConfImpl
 import com.coradec.coradeck.core.util.FileType.*
 import com.coradec.coradeck.core.util.Files.deleteTree
+import com.coradec.coradeck.core.util.here
 import com.coradec.coradeck.core.util.relax
 import com.coradec.coradeck.ctrl.ctrl.impl.BasicAgent
+import com.coradec.coradeck.ctrl.module.CoraControl
 import com.coradec.coradeck.ctrl.module.CoraControlImpl
 import com.coradec.coradeck.dir.model.module.CoraModules
 import com.coradec.coradeck.text.module.CoraTextImpl
@@ -17,8 +22,6 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import java.io.FileWriter
-import java.io.PrintWriter
 import java.nio.file.Files
 import java.nio.file.Paths
 import java.util.*
@@ -27,18 +30,16 @@ import java.util.concurrent.atomic.AtomicInteger
 
 internal class StandardFileReaderTest {
 
-    private val fileLog = PrintWriter(FileWriter("/dev/null"))
-
     @Test
     fun testNoExclusions() {
         // given:
         val rootPath = Paths.get("/tmp/backsync/")
         val exclusions = Exclusions()
-        val processor = NoExclusionsTestProcessor()
-        val testee = BasicFileReader(rootPath, exclusions, processor, fileLog)
+        val processor = TestProcessor().apply { IMMEX.plugin(FileDiscoveryEvent::class, this) }
+        val testee = BasicFileReader()
         // when:
-        val count = testee.start()
-        processor.waitFor(count)
+        val count = testee.inject(StartDiscoveryVoucher(here, rootPath, Recipe(exclusions))).value
+        IMMEX.unplug(processor)
         // then:
         assertThat(count).isEqualTo(6)
         assertThat(processor.processed.get()).isEqualTo(count)
@@ -49,11 +50,12 @@ internal class StandardFileReaderTest {
         // given:
         val rootPath = Paths.get("/tmp/backsync/")
         val exclusions = Exclusions(prefix = listOf("$ROOT/dir"))
-        val processor = NoExclusionsTestProcessor()
-        val testee = BasicFileReader(rootPath, exclusions, processor, fileLog)
+        val processor = TestProcessor().apply { IMMEX.plugin(FileDiscoveryEvent::class, this) }
+        val testee = BasicFileReader()
         // when:
-        val count = testee.start()
+        val count = testee.inject(StartDiscoveryVoucher(here, rootPath, Recipe(exclusions))).value
         processor.waitFor(count)
+        IMMEX.unplug(processor)
         // then:
         assertThat(count).isEqualTo(4)
         assertThat(processor.processed.get()).isEqualTo(count)
@@ -64,11 +66,12 @@ internal class StandardFileReaderTest {
         // given:
         val rootPath = Paths.get("/tmp/backsync/")
         val exclusions = Exclusions(pattern = listOf(Regex(".*/x")))
-        val processor = NoExclusionsTestProcessor()
-        val testee = BasicFileReader(rootPath, exclusions, processor, fileLog)
+        val processor = TestProcessor().apply { IMMEX.plugin(FileDiscoveryEvent::class, this) }
+        val testee = BasicFileReader()
         // when:
-        val count = testee.start()
+        val count = testee.inject(StartDiscoveryVoucher(here, rootPath, Recipe(exclusions))).value
         processor.waitFor(count)
+        IMMEX.unplug(processor)
         // then:
         assertThat(count).isEqualTo(4)
         assertThat(processor.processed.get()).isEqualTo(count)
@@ -79,11 +82,12 @@ internal class StandardFileReaderTest {
         // given:
         val rootPath = Paths.get("/tmp/backsync/")
         val exclusions = Exclusions(type = EnumSet.of(SYMLINK, LOST_LINK, LOOP_LINK))
-        val processor = NoExclusionsTestProcessor()
-        val testee = BasicFileReader(rootPath, exclusions, processor, fileLog)
+        val processor = TestProcessor().apply { IMMEX.plugin(FileDiscoveryEvent::class, this) }
+        val testee = BasicFileReader()
         // when:
-        val count = testee.start()
+        val count = testee.inject(StartDiscoveryVoucher(here, rootPath, Recipe(exclusions))).value
         processor.waitFor(count)
+        IMMEX.unplug(processor)
         // then:
         assertThat(count).isEqualTo(4)
         assertThat(processor.processed.get()).isEqualTo(count)
@@ -94,25 +98,27 @@ internal class StandardFileReaderTest {
         // given:
         val rootPath = Paths.get("/home/dio/")
         val exclusions = Exclusions(type = EnumSet.of(SYMLINK, LOST_LINK, LOOP_LINK))
-        val processor = NoExclusionsTestProcessor()
-        val testee = BasicFileReader(rootPath, exclusions, processor, fileLog)
+        val processor = TestProcessor().apply { IMMEX.plugin(FileDiscoveryEvent::class, this) }
+        val testee = BasicFileReader()
         // when:
-        val count = testee.start()
+        val count = testee.inject(StartDiscoveryVoucher(here, rootPath, Recipe(exclusions))).value
         processor.waitFor(count)
+        IMMEX.unplug(processor)
         // then:
         assertThat(count).isGreaterThan(900_000)
         assertThat(processor.processed.get()).isEqualTo(count)
     }
 
-    class NoExclusionsTestProcessor : BasicAgent() {
+    class TestProcessor : BasicAgent() {
         val processed = AtomicInteger(0)
         val togo = Semaphore(0)
+
         fun waitFor(count: Int) {
             togo.acquire(count)
         }
 
         override fun onMessage(message: Information): Unit = when (message) {
-            is FileDiscoveryEvent -> {
+            is FileDiscoveryEntryEvent -> {
                 processed.incrementAndGet()
                 togo.release()
             }
@@ -138,6 +144,7 @@ internal class StandardFileReaderTest {
 
     companion object {
         val ROOT = Paths.get("/tmp/backsync")
+        val IMMEX = CoraControl.IMMEX
 
         init {
             CoraModules.register(CoraConfImpl(), CoraComImpl(), CoraTextImpl(), CoraTypeImpl(), CoraControlImpl())

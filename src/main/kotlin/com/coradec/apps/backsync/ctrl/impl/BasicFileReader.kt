@@ -1,82 +1,51 @@
 package com.coradec.apps.backsync.ctrl.impl
 
-import com.coradec.apps.backsync.com.FileDiscoveryEndEvent
-import com.coradec.apps.backsync.com.FileDiscoveryErrorEvent
-import com.coradec.apps.backsync.com.FileDiscoveryEvent
+import com.coradec.apps.backsync.com.ContinueDiscoveryRequest
+import com.coradec.apps.backsync.com.StartDiscoveryRequest
+import com.coradec.apps.backsync.com.StartDiscoveryVoucher
+import com.coradec.apps.backsync.com.impl.FileDiscoveryEndEvent
+import com.coradec.apps.backsync.com.impl.FileDiscoveryEntryEvent
 import com.coradec.apps.backsync.ctrl.FileReader
-import com.coradec.apps.backsync.model.FileDescriptor
-import com.coradec.apps.backsync.model.impl.Exclusions
-import com.coradec.coradeck.com.model.Recipient
+import com.coradec.apps.backsync.ctrl.TreeWalker
+import com.coradec.coradeck.com.model.Information
+import com.coradec.coradeck.core.util.execute
+import com.coradec.coradeck.core.util.here
+import com.coradec.coradeck.core.util.swallow
 import com.coradec.coradeck.ctrl.ctrl.impl.BasicAgent
-import java.io.IOException
-import java.io.PrintWriter
-import java.nio.file.FileVisitResult
-import java.nio.file.FileVisitResult.*
-import java.nio.file.FileVisitor
-import java.nio.file.Files
-import java.nio.file.Path
-import java.nio.file.attribute.BasicFileAttributes
-import java.util.concurrent.atomic.AtomicInteger
+import com.coradec.coradeck.ctrl.module.CoraControl.IMMEX
 
-class BasicFileReader(
-    override val root: Path,
-    override val exclusions: Exclusions,
-    override val target: Recipient,
-    override val fileLog: PrintWriter
-) : BasicAgent(), FileReader {
-    @Volatile private var active = true
+class BasicFileReader : BasicAgent(), FileReader {
+    @Volatile
+    private var active = true
     private var stopReason: Throwable? = null
-    override fun start(): Int {
-        val count = AtomicInteger(0)
-        Files.walkFileTree(root, StandardFileVisitor(count))
-        target.inject(FileDiscoveryEndEvent(this))
-        return count.get().let { if (stopReason != null) -it else it }
-    }
 
-    val continuation: FileVisitResult get() = when {
-        !active -> TERMINATE
-        stopReason != null -> TERMINATE
-        else -> CONTINUE
-    }
-
-    inner class StandardFileVisitor(private val count: AtomicInteger) : FileVisitor<Path> {
-        override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes) = continuation.let {
-            val fd = FileDescriptor(dir, attrs)
-            if (!exclusions.matches(fd)) {
-                target.inject(FileDiscoveryEvent(this@BasicFileReader, fd))
-                count.incrementAndGet()
-                Thread.sleep(1)
-                it
-            } else SKIP_SUBTREE
+    override fun onMessage(message: Information) = when (message) {
+        is StartDiscoveryRequest -> {
+            debug("Received StartDiscoveryRequest")
+            inject(ContinueDiscoveryRequest(here, message, TreeWalker(message.root, message.recipe))).swallow()
         }
-
-        override fun visitFile(path: Path, attrs: BasicFileAttributes): FileVisitResult = continuation.also {
-            val fd = FileDescriptor(path, attrs)
-            if (!exclusions.matches(fd)) {
-                target.inject(FileDiscoveryEvent(this@BasicFileReader, fd))
-                count.incrementAndGet()
-                Thread.sleep(2, 500000)
-                fileLog.println(fd)
+        is StartDiscoveryVoucher -> {
+            debug("Received StartDiscoveryVoucher")
+            inject(ContinueDiscoveryRequest(here, message, TreeWalker(message.root, message.recipe))).swallow()
+        }
+        is ContinueDiscoveryRequest -> execute {
+            debug("Received ContinueDiscoveryRequest")
+            val next = message.next
+            if (next == null) {
+                message.trigger.succeed()
+                IMMEX.inject(FileDiscoveryEndEvent(here))
+            } else {
+                ++message.count
+                IMMEX.inject(FileDiscoveryEntryEvent(here, next))
+                inject(message.delayedCopy)
             }
         }
-
-        override fun visitFileFailed(path: Path, exc: IOException): FileVisitResult = continuation.let {
-            target.inject(FileDiscoveryErrorEvent(this@BasicFileReader, exc))
-            if (Files.isDirectory(path)) SKIP_SUBTREE else it
-        }
-
-        override fun postVisitDirectory(dir: Path, exc: IOException?): FileVisitResult = continuation.also {
-            if (exc != null) target.inject(FileDiscoveryErrorEvent(this@BasicFileReader, exc))
-        }
+        else -> super.onMessage(message)
     }
 
     override fun stop(reason: Throwable) {
         debug("Stopping the file reader.")
         stopReason = reason
         active = false
-    }
-
-    companion object {
-        private val US = Char(31)
     }
 }
