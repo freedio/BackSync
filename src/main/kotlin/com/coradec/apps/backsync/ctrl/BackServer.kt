@@ -6,8 +6,10 @@ import com.coradec.coradeck.com.model.Recipient
 import com.coradec.coradeck.conf.model.LocalProperty
 import com.coradec.coradeck.core.util.classname
 import com.coradec.coradeck.ctrl.ctrl.Agent
+import com.coradec.coradeck.ctrl.model.AgentPool
 
 interface BackServer: Agent {
+    val writerPool: AgentPool
     fun close()
 
     companion object {

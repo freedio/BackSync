@@ -5,26 +5,25 @@ import com.coradec.coradeck.com.model.Recipient
 import com.coradec.coradeck.com.model.Request
 import com.coradec.coradeck.com.model.impl.BasicRequest
 import com.coradec.coradeck.core.model.Origin
-import com.coradec.coradeck.ctrl.module.CoraControl
+import com.coradec.coradeck.core.model.Priority
+import com.coradec.coradeck.core.model.Priority.C2
 import java.nio.file.Path
 import java.time.ZonedDateTime
-import java.time.temporal.ChronoUnit
 
 class ContinueDiscoveryRequest(
     origin: Origin,
     val trigger: Request,
     private val treeWalker: TreeWalker,
     target: Recipient? = null,
-    validFrom: ZonedDateTime = ZonedDateTime.now()
-) : BasicRequest(origin, target = target) {
-    val delayedCopy get() = ContinueDiscoveryRequest(origin, trigger, treeWalker, recipient, validFrom = backlogDelay)
+    validFrom: ZonedDateTime = ZonedDateTime.now(),
+    priority: Priority = C2
+) : BasicRequest(origin, priority, target = target, validFrom = validFrom) {
+    val delayedCopy get() = ContinueDiscoveryRequest(origin, trigger, treeWalker, recipient, validFrom = delayed, priority)
     var count = 0
     val next: Path? get() = treeWalker.next
-
-    override fun copy(recipient: Recipient?) = ContinueDiscoveryRequest(origin, trigger, treeWalker, recipient)
+    val post: Path? get() = treeWalker.post.poll()
 
     companion object {
-        val IMMEX = CoraControl.IMMEX
-        private val backlogDelay get() = ZonedDateTime.now().plus(IMMEX.load.toLong(), ChronoUnit.MILLIS)
+        private val delayed get() = ZonedDateTime.now()//.plus(10, ChronoUnit.MILLIS)
     }
 }

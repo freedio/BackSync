@@ -7,14 +7,12 @@ import com.coradec.coradeck.ctrl.ctrl.impl.BasicAgent
 import com.coradec.coradeck.text.model.LocalText
 import java.io.PrintWriter
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.nio.file.StandardCopyOption.COPY_ATTRIBUTES
 import java.nio.file.StandardCopyOption.REPLACE_EXISTING
-import java.nio.file.attribute.BasicFileAttributes
-import java.nio.file.attribute.PosixFileAttributeView
-import java.nio.file.attribute.PosixFileAttributes
-import java.nio.file.attribute.PosixFilePermissions
+import java.nio.file.attribute.*
 import kotlin.io.path.getLastModifiedTime
 import kotlin.io.path.getOwner
 import kotlin.io.path.readAttributes
@@ -58,11 +56,13 @@ class BasicFileWriter : BasicAgent(), FileWriter {
             }
             Files.setLastModifiedTime(realPath, ftime)
             sourcePath.getOwner()?.let { targetPath.setOwner(it) }
-            val posixFile = Files.getFileAttributeView(realPath, PosixFileAttributeView::class.java)
-            if (posixFile != null) {
-                posixFile.setGroup(sourceMode.group())
-                posixFile.setPermissions(sourceMode.permissions())
-                posixFile.setTimes(ftime, ftime, ftime)
+            val ownerview = Files.getFileAttributeView(targetPath, FileOwnerAttributeView::class.java, LinkOption.NOFOLLOW_LINKS)
+            val posixView = Files.getFileAttributeView(realPath, PosixFileAttributeView::class.java)
+            ownerview.owner = sourceMode.owner()
+            if (posixView != null) {
+                posixView.setGroup(sourceMode.group())
+                posixView.setPermissions(sourceMode.permissions())
+                posixView.setTimes(ftime, ftime, ftime)
             }
         }
     }

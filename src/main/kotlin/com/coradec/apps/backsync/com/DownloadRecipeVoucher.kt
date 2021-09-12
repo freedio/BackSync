@@ -10,6 +10,4 @@ class DownloadRecipeVoucher(
     val hostname: String,
     val group: String,
     target: Recipient? = null
-): BasicVoucher<Recipe>(origin, target = target) {
-    override fun copy(recipient: Recipient?) = DownloadRecipeVoucher(origin, hostname, group, recipient)
-}
+): BasicVoucher<Recipe>(origin, target = target)

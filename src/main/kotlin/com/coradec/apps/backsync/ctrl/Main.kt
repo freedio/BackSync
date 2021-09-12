@@ -34,7 +34,7 @@ open class Main(qsize: Int = 1024): BasicAgent(qsize) {
     val root: Path get() = rootDirectory.value
     val exclusions: Exclusions get() = excludes.value
     val group: String get() = backupGroup.value
-    private val filelog get() = PrintWriter(Files.newBufferedWriter(fileLogFile.value))
+    private val filelog by lazy { PrintWriter(Files.newBufferedWriter(fileLogFile.value)) }
 
     init {
         atEnd { filelog.close() }

@@ -14,11 +14,12 @@ Exclude:
     - /mnt
     - /proc
     - /run
+    - /snap
     - /sys
     - /tmp
     - /var
   pattern:
     - .+\.tmp$
-    - ^\?.*
-    - /home/[^/]+/.cache/
-    - /home/[^/]*/.local/share/Trash/
+    - /\?.*$
+    - /home/[^/]+/\.cache/
+    - /home/[^/]+/\.local/share/Trash/
