@@ -1,33 +1,53 @@
 package com.coradec.apps.backsync.ctrl.impl
 
-import com.coradec.apps.backsync.com.WriteFileRequest
+import com.coradec.apps.backsync.com.impl.*
 import com.coradec.apps.backsync.ctrl.FileWriter
-import com.coradec.apps.backsync.trouble.InvalidFileTypeException
 import com.coradec.coradeck.ctrl.ctrl.impl.BasicAgent
 import com.coradec.coradeck.text.model.LocalText
-import java.io.PrintWriter
+import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
-import java.nio.file.LinkOption
+import java.nio.file.LinkOption.NOFOLLOW_LINKS
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.nio.file.StandardCopyOption.COPY_ATTRIBUTES
 import java.nio.file.StandardCopyOption.REPLACE_EXISTING
-import java.nio.file.attribute.*
-import kotlin.io.path.getLastModifiedTime
-import kotlin.io.path.getOwner
-import kotlin.io.path.readAttributes
-import kotlin.io.path.setOwner
+import java.nio.file.attribute.BasicFileAttributeView
+import java.nio.file.attribute.BasicFileAttributes
+import java.nio.file.attribute.PosixFileAttributeView
+import java.nio.file.attribute.PosixFileAttributes
+import kotlin.io.path.*
 
 class BasicFileWriter : BasicAgent(), FileWriter {
-    private val log = PrintWriter(Files.newOutputStream(Paths.get("/tmp/BasicFileWriter.log")))
     init {
-        addRoute(WriteFileRequest::class, ::writeFile)
+//        addRoute(CreateRegularFileRequest::class, ::createRegularFile)
+//        addRoute(CreatePhysicalDirectoryRequest::class, ::createPhysicalDirectory)
+//        addRoute(CreateSymbolicDirectoryRequest::class, ::createSymbolicDirectory)
+//        addRoute(CreateSymbolicLinkRequest::class, ::createSymbolicLink)
+//        addRoute(CreateLoopLinkRequest::class, ::createLoopLink)
+//        addRoute(CreateLostLinkRequest::class, ::createLostLink)
+//        addRoute(UpdateDirectoryRequest::class, ::updateDirectory)
+        addRoute(RegularFileDiscovered::class, ::regularFileDiscovered)
+        addRoute(DirectoryDiscovered::class, ::directoryDiscovered)
+        addRoute(SymbolicLinkDiscovered::class, this::symbolicLinkDiscovered)
+        addRoute(LostLinkDiscovered::class, ::lostLinkDiscovered)
+        addRoute(LoopLinkDiscovered::class, this::loopLinkDiscovered)
+        addRoute(FreakDiscovered::class, ::freakDiscovered)
+        addRoute(DirectoryUpdate::class, ::updateDirectory)
     }
 
-    private fun writeFile(request: WriteFileRequest) {
+    private fun directoryDiscovered(request: DirectoryDiscovered) {
         try {
-            debug("FileWriter: got request to write file ${request.targetPath}")
-            sendTo(request.sourcePath, request.targetPath, request.targetRealPath)
+            val sourcePath = request.path
+            val targetPath = request.baseDir.resolve(sourcePath.relativeTo(root))
+            do {
+                if (targetPath.exists(NOFOLLOW_LINKS)) {
+                    info(TEXT_SAME_DIRECTORY_EXISTS, targetPath)
+                    break
+                }
+                info(TEXT_CREATING_DIRECTORY, targetPath)
+                Files.createDirectory(targetPath)
+                debug(TEXT_DIRECTORY_CREATED, targetPath)
+            } while (false)
             request.succeed()
         } catch (e: Exception) {
             error(e)
@@ -35,39 +55,395 @@ class BasicFileWriter : BasicAgent(), FileWriter {
         }
     }
 
-    override fun sendTo(sourcePath: Path, targetPath: Path, targetRealPath: Path?) {
-        log.println("$targetPath")
-        val sourceAttr = sourcePath.readAttributes<BasicFileAttributes>()
-        val sourceMode = sourcePath.readAttributes<PosixFileAttributes>()
-        val sourcePerm = sourcePath.readAttributes<PosixFileAttributes>()
-        val ftime = sourcePath.getLastModifiedTime()
-        if (!Files.exists(targetPath)) {
-            val realPath = when  {
-                sourceAttr.isRegularFile -> Files.copy(sourcePath, targetPath, REPLACE_EXISTING, COPY_ATTRIBUTES)
-                sourceAttr.isDirectory -> {
-                    val dirAccessPermissions = PosixFilePermissions.asFileAttribute(sourcePerm.permissions())
-                    Files.createDirectory(targetPath, dirAccessPermissions)
+    private fun regularFileDiscovered(request: RegularFileDiscovered) {
+        try {
+            val sourcePath = request.path
+            val sourceAttr = sourcePath.fileAttributesView<BasicFileAttributeView>(NOFOLLOW_LINKS).readAttributes()
+            val targetPath = request.baseDir.resolve(sourcePath.relativeTo(root))
+            do {
+                if (targetPath.exists(NOFOLLOW_LINKS)) {
+                    val targetAttr = targetPath.readAttributes<BasicFileAttributes>()
+                    val sameTime = targetAttr.lastModifiedTime() == sourceAttr.lastModifiedTime()
+                    val sameSize = targetAttr.size() == sourceAttr.size()
+                    if (sameTime && sameSize) {
+                        info(TEXT_SAME_FILE_EXISTS, sourcePath)
+                        break
+                    }
                 }
-                sourceAttr.isSymbolicLink -> {
-                    if (targetRealPath == null) throw IllegalArgumentException("targetRealPath for a SYMLINK must be set!")
-                    Files.createSymbolicLink(targetPath, targetRealPath)
+                info(TEXT_UPLOADING_FILE, sourcePath, request.baseDir)
+                Files.copy(sourcePath, targetPath, COPY_ATTRIBUTES, REPLACE_EXISTING, NOFOLLOW_LINKS)
+                debug(TEXT_UPLOADED_FILE, sourcePath, request.baseDir)
+            } while (false)
+            request.succeed()
+        } catch (e: Exception) {
+            error(e)
+            request.fail(e)
+        }
+    }
+
+    private fun symbolicLinkDiscovered(request: SymbolicLinkDiscovered) {
+        try {
+            val sourcePath = request.path
+            val sourceLinkTarget = sourcePath.readSymbolicLink()
+            val targetPath = request.baseDir.resolve(sourcePath.relativeTo(root))
+            do {
+                var textCreatingSymlink = TEXT_CREATING_SYMLINK
+                var textSymlinkCreated = TEXT_SYMLINK_CREATED
+                if (targetPath.exists(NOFOLLOW_LINKS)) {
+                    val targetLinkTarget = targetPath.readSymbolicLink()
+                    if (targetLinkTarget == sourceLinkTarget) {
+                        info(TEXT_SAME_SYMLINK_EXISTS, sourcePath)
+                        break
+                    } else {
+                        textCreatingSymlink = TEXT_UPDATING_SYMLINK
+                        textSymlinkCreated = TEXT_SYMLINK_UPDATED
+                        Files.delete(targetPath)
+                    }
                 }
-                else -> throw InvalidFileTypeException(TEXT_CANNOT_CREATE.content)
+                var cycles = 50
+                while (targetPath.parent.notExists() && --cycles != 0) Thread.sleep(100)
+                info(textCreatingSymlink, sourcePath, targetPath)
+                Files.createSymbolicLink(targetPath, sourceLinkTarget)
+                debug(textSymlinkCreated, targetPath)
+            } while (false)
+            request.succeed()
+        } catch (e: Exception) {
+            error(e)
+            request.fail(e)
+        }
+    }
+
+    private fun lostLinkDiscovered(request: LostLinkDiscovered) {
+        try {
+            val sourcePath = request.path
+            val sourceLinkTarget = sourcePath.readSymbolicLink()
+            val targetPath = request.baseDir.resolve(sourcePath.relativeTo(root))
+            do {
+                var textCreatingSymlink = TEXT_CREATING_LOSTLINK
+                var textSymlinkCreated = TEXT_LOSTLINK_CREATED
+                if (targetPath.exists(NOFOLLOW_LINKS)) {
+                    val targetLinkTarget = targetPath.readSymbolicLink()
+                    if (targetLinkTarget == sourceLinkTarget) {
+                        info(TEXT_SAME_SYMLINK_EXISTS, sourcePath)
+                        break
+                    } else {
+                        textCreatingSymlink = TEXT_UPDATING_LOSTLINK
+                        textSymlinkCreated = TEXT_LOSTLINK_UPDATED
+                        Files.delete(targetPath)
+                    }
+                }
+                var cycles = 50
+                while (targetPath.parent.notExists() && --cycles != 0) Thread.sleep(100)
+                info(textCreatingSymlink, sourcePath, targetPath)
+                Files.createSymbolicLink(targetPath, sourceLinkTarget)
+                debug(textSymlinkCreated, targetPath)
+            } while (false)
+            request.succeed()
+        } catch (e: Exception) {
+            error(e)
+            request.fail(e)
+        }
+    }
+
+    private fun loopLinkDiscovered(request: LoopLinkDiscovered) {
+        try {
+            val sourcePath = request.path
+            val sourceLinkTarget = sourcePath.readSymbolicLink()
+            val targetPath = request.baseDir.resolve(sourcePath.relativeTo(root))
+            do {
+                var textCreatingSymlink = TEXT_CREATING_LOOPLINK
+                var textSymlinkCreated = TEXT_LOOPLINK_CREATED
+                if (targetPath.exists(NOFOLLOW_LINKS)) {
+                    val targetLinkTarget = targetPath.readSymbolicLink()
+                    if (targetLinkTarget == sourceLinkTarget) {
+                        info(TEXT_SAME_SYMLINK_EXISTS, sourcePath)
+                        break
+                    } else {
+                        textCreatingSymlink = TEXT_UPDATING_LOOPLINK
+                        textSymlinkCreated = TEXT_LOOPLINK_UPDATED
+                        Files.delete(targetPath)
+                    }
+                }
+                var cycles = 50
+                while (targetPath.parent.notExists() && --cycles != 0) Thread.sleep(100)
+                info(textCreatingSymlink, sourcePath, targetPath)
+                Files.createSymbolicLink(targetPath, sourceLinkTarget)
+                debug(textSymlinkCreated, targetPath)
+            } while (false)
+            request.succeed()
+        } catch (e: Exception) {
+            error(e)
+            request.fail(e)
+        }
+    }
+
+    private fun updateDirectory(request: DirectoryUpdate) {
+        try {
+            val sourcePath = request.path
+            val targetPath = request.baseDir.resolve(sourcePath.relativeTo(root))
+            val sourceAttrs = sourcePath.readAttributes<BasicFileAttributes>(NOFOLLOW_LINKS)
+            val targetAttrs = targetPath.readAttributes<BasicFileAttributes>(NOFOLLOW_LINKS)
+            if (sourceAttrs.lastModifiedTime() == targetAttrs.lastModifiedTime())
+                info(TEXT_DIRECTORY_NOT_UPDATED, targetPath)
+            else {
+                info(TEXT_UPDATING_DIRECTORY, targetPath)
+                copyAttributes(sourcePath, targetPath)
+                debug(TEXT_DIRECTORY_UPDATED, targetPath)
             }
-            Files.setLastModifiedTime(realPath, ftime)
-            sourcePath.getOwner()?.let { targetPath.setOwner(it) }
-            val ownerview = Files.getFileAttributeView(targetPath, FileOwnerAttributeView::class.java, LinkOption.NOFOLLOW_LINKS)
-            val posixView = Files.getFileAttributeView(realPath, PosixFileAttributeView::class.java)
-            ownerview.owner = sourceMode.owner()
-            if (posixView != null) {
-                posixView.setGroup(sourceMode.group())
-                posixView.setPermissions(sourceMode.permissions())
-                posixView.setTimes(ftime, ftime, ftime)
+            request.succeed()
+        } catch (e: Exception) {
+            error(e)
+            request.fail(e)
+        }
+    }
+
+    private fun freakDiscovered(request: FreakDiscovered) {
+        val sourcePath = request.path
+        warn(TEXT_SKIPPING_FREAK, sourcePath)
+    }
+
+    private fun createRegularFile(request: CreateRegularFileRequest) {
+        val sourcePath = request.file
+        val sourceAttr = sourcePath.fileAttributesView<BasicFileAttributeView>(NOFOLLOW_LINKS).readAttributes()
+        val targetPath = request.baseDir.resolve(sourcePath.relativeTo(root))
+        assertParent(targetPath)
+        try {
+            do {
+                if (targetPath.exists(NOFOLLOW_LINKS)) {
+                    val targetAttr = targetPath.readAttributes<BasicFileAttributes>()
+                    val sameTime = targetAttr.lastModifiedTime() == sourceAttr.lastModifiedTime()
+                    val sameSize = targetAttr.size() == sourceAttr.size()
+                    if (sameTime && sameSize) {
+                        info(TEXT_SAME_FILE_EXISTS, sourcePath)
+                        request.succeed()
+                        break
+                    }
+                }
+                var cycles = 50
+                while (targetPath.parent.notExists() && --cycles != 0) Thread.sleep(100)
+                info(TEXT_UPLOADING_FILE, sourcePath, request.baseDir)
+                Files.copy(sourcePath, targetPath, COPY_ATTRIBUTES, REPLACE_EXISTING, NOFOLLOW_LINKS)
+                debug(TEXT_UPLOADED_FILE, sourcePath, request.baseDir)
+            } while (false)
+            request.succeed()
+        } catch (e: Exception) {
+            error(e)
+            request.fail(e)
+        }
+    }
+
+    private fun createPhysicalDirectory(request: CreatePhysicalDirectoryRequest) {
+        val sourcePath = request.dir
+        val targetPath = request.baseDir.resolve(sourcePath.relativeTo(root))
+        assertParent(targetPath)
+        do {
+            if (targetPath.exists(NOFOLLOW_LINKS)) {
+                info(TEXT_SAME_DIRECTORY_EXISTS, sourcePath)
+                break
+            }
+            var cycles = 50
+            while (targetPath.parent.notExists() && --cycles != 0) Thread.sleep(100)
+            info(TEXT_CREATING_DIRECTORY, targetPath)
+            try {
+                Files.createDirectory(targetPath)
+                debug(TEXT_DIRECTORY_CREATED, targetPath)
+            } catch (e: FileAlreadyExistsException) {
+                detail("Directory not created, because it already exists, maybe because of a missing parent.")
+            }
+        } while (false)
+    }
+
+    private fun createSymbolicDirectory(request: CreateSymbolicDirectoryRequest) {
+        val sourcePath = request.dir
+        val realSourcePath = request.dir.toRealPath()
+        val targetTargetPath = request.baseDir.resolve(realSourcePath.relativeTo(root))
+        val targetPath = request.baseDir.resolve(sourcePath.relativeTo(root))
+        assertParent(targetPath)
+        do {
+            var textCreatingSymdir = TEXT_CREATING_DIRLINK
+            var textSymdirCreated = TEXT_DIRLINK_CREATED
+            if (targetPath.exists(NOFOLLOW_LINKS)) {
+                val realTargetPath = targetPath.toRealPath()
+                if (targetTargetPath == realTargetPath) {
+                    info(TEXT_SAME_DIRLINK_EXISTS, sourcePath)
+                    break
+                } else {
+                    textCreatingSymdir = TEXT_UPDATING_DIRLINK
+                    textSymdirCreated = TEXT_DIRLINK_UPDATED
+                    Files.delete(targetPath)
+                }
+            }
+            var cycles = 50
+            while (targetPath.parent.notExists() && --cycles != 0) Thread.sleep(100)
+            info(textCreatingSymdir, targetPath)
+            Files.createSymbolicLink(targetPath, targetTargetPath)
+            debug(textSymdirCreated, targetPath)
+        } while (false)
+    }
+
+    private fun createSymbolicLink(request: CreateSymbolicLinkRequest) {
+        val sourcePath = request.file
+        val sourceLinkTarget = request.file.readSymbolicLink()
+        val targetPath = request.baseDir.resolve(sourcePath.relativeTo(root))
+        assertParent(targetPath)
+        do {
+            var textCreatingSymlink = TEXT_CREATING_SYMLINK
+            var textSymlinkCreated = TEXT_SYMLINK_CREATED
+            if (targetPath.exists(NOFOLLOW_LINKS)) {
+                val targetLinkTarget = targetPath.readSymbolicLink()
+                if (targetLinkTarget == sourceLinkTarget) {
+                    info(TEXT_SAME_SYMLINK_EXISTS, sourcePath)
+                    break
+                } else {
+                    textCreatingSymlink = TEXT_UPDATING_SYMLINK
+                    textSymlinkCreated = TEXT_SYMLINK_UPDATED
+                    Files.delete(targetPath)
+                }
+            }
+            var cycles = 50
+            while (targetPath.parent.notExists() && --cycles != 0) Thread.sleep(100)
+            info(textCreatingSymlink, sourcePath, targetPath)
+            Files.createSymbolicLink(targetPath, sourceLinkTarget)
+            debug(textSymlinkCreated, targetPath)
+        } while (false)
+    }
+
+    private fun createLoopLink(request: CreateLoopLinkRequest) {
+        val sourcePath = request.file
+        val sourceLinkTarget = request.file.readSymbolicLink()
+        val targetPath = request.baseDir.resolve(sourcePath.relativeTo(root))
+        assertParent(targetPath)
+        do {
+            var textCreatingSymlink = TEXT_CREATING_LOOPLINK
+            var textSymlinkCreated = TEXT_LOOPLINK_CREATED
+            if (targetPath.exists(NOFOLLOW_LINKS)) {
+                val targetLinkTarget = targetPath.readSymbolicLink()
+                if (targetLinkTarget == sourceLinkTarget) {
+                    info(TEXT_SAME_LOOPLINK_EXISTS, sourcePath)
+                    break
+                } else {
+                    textCreatingSymlink = TEXT_UPDATING_LOOPLINK
+                    textSymlinkCreated = TEXT_LOOPLINK_UPDATED
+                    Files.delete(targetPath)
+                }
+            }
+            var cycles = 50
+            while (targetPath.parent.notExists() && --cycles != 0) Thread.sleep(100)
+            info(textCreatingSymlink, sourcePath, targetPath)
+            Files.createSymbolicLink(targetPath, sourceLinkTarget)
+            debug(textSymlinkCreated, targetPath)
+        } while (false)
+    }
+
+    private fun createLostLink(request: CreateLostLinkRequest) {
+        val sourcePath = request.file
+        val sourceLinkTarget = request.file.readSymbolicLink()
+        val targetPath = request.baseDir.resolve(sourcePath.relativeTo(root))
+        assertParent(targetPath)
+        do {
+            var textCreatingSymlink = TEXT_CREATING_LOOPLINK
+            var textSymlinkCreated = TEXT_LOOPLINK_CREATED
+            if (targetPath.exists(NOFOLLOW_LINKS)) {
+                val targetLinkTarget = targetPath.readSymbolicLink()
+                if (targetLinkTarget == sourceLinkTarget) {
+                    info(TEXT_SAME_LOOPLINK_EXISTS, sourcePath)
+                    break
+                } else {
+                    textCreatingSymlink = TEXT_UPDATING_LOOPLINK
+                    textSymlinkCreated = TEXT_LOOPLINK_UPDATED
+                    Files.delete(targetPath)
+                }
+            }
+            var cycles = 50
+            while (targetPath.parent.notExists() && --cycles != 0) Thread.sleep(100)
+            info(textCreatingSymlink, sourcePath, targetPath)
+            Files.createSymbolicLink(targetPath, sourceLinkTarget)
+            debug(textSymlinkCreated, targetPath)
+        } while (false)
+    }
+
+    private fun updateDirectory(request: UpdateDirectoryRequest) {
+        val sourcePath = request.dir
+        val targetPath = request.baseDir.resolve(sourcePath.relativeTo(root))
+        var cycles = 50
+        while (targetPath.notExists() && --cycles != 0) Thread.sleep(100)
+        val sourceAttrs = sourcePath.readAttributes<BasicFileAttributes>(NOFOLLOW_LINKS)
+        val targetAttrs = targetPath.readAttributes<BasicFileAttributes>(NOFOLLOW_LINKS)
+        if (sourceAttrs.lastModifiedTime() == targetAttrs.lastModifiedTime())
+            info(TEXT_DIRECTORY_NOT_UPDATED, targetPath)
+        else {
+            info(TEXT_UPDATING_DIRECTORY, targetPath)
+            copyAttributes(sourcePath, targetPath)
+            debug(TEXT_DIRECTORY_UPDATED, targetPath)
+        }
+    }
+
+    private fun assertParent(path: Path) {
+        val parent = path.parent
+        if (parent.notExists()) {
+            assertParent(parent)
+            info(TEXT_CREATING_NONEXISTENT_DIRECTORY, path)
+            try {
+                Files.createDirectory(parent)
+                debug(TEXT_NONEXISTENT_DIRECTORY_CREATED, path)
+            } catch (e: FileAlreadyExistsException) {
+                trace("Apparently, original file creator was faster than ‹assertParent› → ignoring.")
             }
         }
     }
 
+    private fun copyAttributes(sourcePath: Path, targetPath: Path) {
+        val sourceOwner = sourcePath.getOwner(NOFOLLOW_LINKS)
+        val sourcePosix = try {
+            sourcePath.readAttributes<PosixFileAttributes>()
+        } catch (e: UnsupportedOperationException) {
+            null
+        }
+        val sourcePerms = sourcePosix?.permissions()
+        val sourceGroup = sourcePosix?.group()
+        val sourceCreat = sourcePosix?.creationTime()
+        val sourceAcces = sourcePosix?.lastAccessTime()
+        val sourceModif = sourcePath.getLastModifiedTime()
+        val targetPosix = Files.getFileAttributeView(targetPath, PosixFileAttributeView::class.java, NOFOLLOW_LINKS)
+        if (sourceCreat != null && sourceAcces != null) targetPosix.setTimes(sourceModif, sourceAcces, sourceCreat)
+        else targetPath.setLastModifiedTime(sourceModif)
+        if (sourceOwner != null) targetPath.setOwner(sourceOwner)
+        if (sourcePerms != null) targetPosix.setPermissions(sourcePerms)
+        if (sourceGroup != null) targetPosix.setGroup(sourceGroup)
+    }
+
     companion object {
-        val TEXT_CANNOT_CREATE = LocalText("CannotCreate1")
+        private val root: Path = Paths.get("/")
+        private val TEXT_SAME_FILE_EXISTS = LocalText("SameFileExists1")
+        private val TEXT_SAME_DIRECTORY_EXISTS = LocalText("SameDirectoryExists1")
+        private val TEXT_SAME_DIRLINK_EXISTS = LocalText("SameSymbolicDirectoryExists1")
+        private val TEXT_SAME_SYMLINK_EXISTS = LocalText("SameSymbolicLinkExists1")
+        private val TEXT_SAME_LOOPLINK_EXISTS = LocalText("SameLoopLinkExists1")
+        private val TEXT_UPLOADING_FILE = LocalText("UploadingFile2")
+        private val TEXT_UPLOADED_FILE = LocalText("UploadedFile2")
+        private val TEXT_CREATING_DIRECTORY = LocalText("CreatingDirectory1")
+        private val TEXT_DIRECTORY_CREATED = LocalText("DirectoryCreated1")
+        private val TEXT_CREATING_DIRLINK = LocalText("CreatingSymbolicDirectory2")
+        private val TEXT_DIRLINK_CREATED = LocalText("SymbolicDirectoryCreated1")
+        private val TEXT_UPDATING_DIRLINK = LocalText("UpdatingSymbolicDirectory2")
+        private val TEXT_DIRLINK_UPDATED = LocalText("SymbolicDirectoryUpdated1")
+        private val TEXT_CREATING_SYMLINK = LocalText("CreatingSymbolicLink2")
+        private val TEXT_SYMLINK_CREATED = LocalText("SymbolicLinkCreated1")
+        private val TEXT_UPDATING_SYMLINK = LocalText("UpdatingSymbolicLink2")
+        private val TEXT_SYMLINK_UPDATED = LocalText("SymbolicLinkUpdated1")
+        private val TEXT_CREATING_LOOPLINK = LocalText("CreatingLoopLink2")
+        private val TEXT_LOOPLINK_CREATED = LocalText("LoopLinkCreated1")
+        private val TEXT_UPDATING_LOOPLINK = LocalText("UpdatingLoopLink2")
+        private val TEXT_LOOPLINK_UPDATED = LocalText("LoopLinkUpdated1")
+        private val TEXT_CREATING_LOSTLINK = LocalText("CreatingLostLink2")
+        private val TEXT_LOSTLINK_CREATED = LocalText("LostLinkCreated1")
+        private val TEXT_UPDATING_LOSTLINK = LocalText("UpdatingLostLink2")
+        private val TEXT_LOSTLINK_UPDATED = LocalText("LostLinkUpdated1")
+        private val TEXT_UPDATING_DIRECTORY = LocalText("UpdatingDirectory1")
+        private val TEXT_DIRECTORY_UPDATED = LocalText("DirectoryUpdated1")
+        private val TEXT_DIRECTORY_NOT_UPDATED = LocalText("DirectoryNotUpdated1")
+        private val TEXT_CREATING_NONEXISTENT_DIRECTORY = LocalText("CreatingNonexistent_Directory1")
+        private val TEXT_NONEXISTENT_DIRECTORY_CREATED = LocalText("Nonexistent_Directory_Created1")
+        private val TEXT_SKIPPING_FREAK = LocalText("SkippingFreak1")
     }
 }

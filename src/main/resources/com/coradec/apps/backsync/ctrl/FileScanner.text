@@ -1,0 +1,2 @@
+# Localized text base for default locale of class FileScanner
+UnexpectedDirectoryType1: «%s»: Expected a directory (link), but got ‹%s›! -> ignored.

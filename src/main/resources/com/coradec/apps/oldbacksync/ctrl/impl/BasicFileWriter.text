@@ -1,0 +1,2 @@
+# Localized text base for default locale of class BasicFileWriter
+CannotCreate1: Don't know how to create a file which is neither regular, nor a directory, not a symbolic link!

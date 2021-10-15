@@ -1,2 +1,32 @@
-# Localized text base for default locale of class BasicFileWriter
-CannotCreate1: Don't know how to create a file which is neither regular, nor a directory, not a symbolic link!
+# localized text base for default locale of class BaseFileWriter
+SameFileExists1: Regular file «%s» not overwritten, because it is up to date.
+SameDirectoryExists1: Directory «%s» not created, because it already exists.
+SameSymbolicDirectoryExists1: Directory symlink «%s» not created, because it already exists and points at the correct target.
+SameSymbolicLinkExists1: Symbolic link «%s» not created, because it already exists and points at the correct target.
+SameLoopLinkExists1: Symbolic loop link «%s» not created, because it already exists and points at the correct target.
+UploadingFile2: Uploading regular file «%s» to «%s».
+UploadedFile2: Regular file «%s» uploaded to «%s».
+CreatingDirectory1: Creating target directory «%s».
+DirectoryCreated1: Directory «%s» created.
+CreatingSymbolicDirectory2: Creating directory symlink «%s» to target «%s».
+SymbolicDirectoryCreated1: Directory symlink «%s» created.
+UpdatingSymbolicDirectory2: Updating directory symlink «%s» to target «%s».
+SymbolicDirectoryUpdated1: Directory symlink «%s» updated.
+CreatingSymbolicLink2: Creating symlink «%s» to target «%s».
+SymbolicLinkCreated1: Symlink «%s» created.
+UpdatingSymbolicLink2: Updating symlink «%s» to target «%s».
+SymbolicLinkUpdated1: Symlink «%s» updated.
+CreatingLoopLink2: Creating loop link «%s» to target «%s».
+LoopLinkCreated1: Loop link «%s» created.
+UpdatingLoopLink2: Updating loop link «%s» to target «%s».
+LoopLinkUpdated1: Loop link «%s» updated.
+CreatingLostLink2: Creating lost link «%s» to target «%s».
+LostLinkCreated1: Lost link «%s» created.
+UpdatingLostLink2: Updating lost link «%s» to target «%s».
+LostLinkUpdated1: Lost link «%s» updated.
+UpdatingDirectory1: Updating target directory «%s».
+DirectoryUpdated1: Target directory «%s» updated.
+DirectoryNotUpdated1: Target directory «%s» not updated, because it is already up to date.
+CreatingNonexistent_Directory1: Creating missing intermediate directory «%s».
+Nonexistent_Directory_Created1: Missing intermediate directory «%s» created.
+SkippingFreak1: Cannot handle freak file system entry «%s»! → skipped.

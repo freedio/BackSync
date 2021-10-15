@@ -1,12 +1,10 @@
 package com.coradec.apps.backsync.ctrl
 
 import com.coradec.apps.backsync.ctrl.impl.BasicFileWriter
-import java.nio.file.Path
+import com.coradec.coradeck.ctrl.ctrl.Agent
 
-interface FileWriter {
-    fun sendTo(sourcePath: Path, targetPath: Path, targetRealPath: Path?)
-
+interface FileWriter : Agent {
     companion object {
-        operator fun invoke() = BasicFileWriter()
+        operator fun invoke(): FileWriter = BasicFileWriter()
     }
 }

@@ -1,94 +1,105 @@
 package com.coradec.apps.backsync.ctrl
 
-import com.coradec.apps.backsync.com.*
-import com.coradec.apps.backsync.com.impl.FileDiscoveryEndEvent
-import com.coradec.apps.backsync.com.impl.FileDiscoveryEntryEvent
-import com.coradec.apps.backsync.com.impl.FileDiscoveryErrorEvent
-import com.coradec.apps.backsync.com.impl.FileDiscoveryPostDirectoryEvent
+import com.coradec.apps.backsync.com.DiscoveryEndEvent
+import com.coradec.apps.backsync.com.DiscoveryEvent
+import com.coradec.apps.backsync.com.DiscoveryRequest
+import com.coradec.apps.backsync.com.impl.*
+import com.coradec.apps.backsync.ctrl.impl.BasicFileScanner
+import com.coradec.coradeck.com.model.MultiRequest
+import com.coradec.coradeck.com.model.impl.Syslog
 import com.coradec.coradeck.com.module.CoraComImpl
 import com.coradec.coradeck.conf.module.CoraConfImpl
-import com.coradec.coradeck.core.trouble.FatalException
-import com.coradec.coradeck.core.util.asOrigin
-import com.coradec.coradeck.ctrl.module.CoraControl.IMMEX
+import com.coradec.coradeck.core.util.classname
+import com.coradec.coradeck.ctrl.module.CoraControl
 import com.coradec.coradeck.ctrl.module.CoraControlImpl
+import com.coradec.coradeck.ctrl.module.ignore
+import com.coradec.coradeck.ctrl.module.receive
 import com.coradec.coradeck.dir.model.module.CoraModules
+import com.coradec.coradeck.text.model.LocalText
 import com.coradec.coradeck.text.module.CoraTextImpl
 import com.coradec.coradeck.type.module.impl.CoraTypeImpl
-import java.io.PrintWriter
-import java.net.InetAddress
-import java.nio.file.Files
+import java.nio.file.Path
 import java.nio.file.Paths
-import kotlin.io.path.isDirectory
 import kotlin.system.exitProcess
 
-/**
- * Main class of the UpSync process.
- */
-
-fun main(vararg args: String) {
-    CoraModules.register(CoraConfImpl(), CoraComImpl(), CoraTextImpl(), CoraTypeImpl(), CoraControlImpl())
-    UpSync(args.toList()).run()
-}
-
-class UpSync(args: List<String>) : Main(65536) {
-    private val log = PrintWriter(Files.newOutputStream(Paths.get("/tmp/UpSync.log")))
-    private val backServer = BackServer(this, system)
-    private val hostname = InetAddress.getLocalHost().hostName
-    private val baseDir = if (args.isEmpty()) root else Paths.get(args[0])
-    private val fileReader = FileReader()
-    private var killFileReader = false
+class UpSync(args: List<String>) : Main() {
+    private val baseDirs: List<Path> = if (args.isEmpty()) roots else args.map { Paths.get(it) }
 
     init {
-        addRoute(FileDiscoveryEntryEvent::class.java, ::discovered)
-        addRoute(FileDiscoveryEndEvent::class.java, ::end)
-        addRoute(FileDiscoveryErrorEvent::class.java, ::error)
-        addRoute(FileDiscoveryPostDirectoryEvent::class.java, ::afterDir)
+        addRoute(DirectoryDiscovered::class, ::directoryDiscovered)
+        addRoute(DirectoryUpdate::class, ::updateDirectory)
+        addRoute(SymbolicLinkDiscovered::class, this::symbolicLinkDiscovered)
+        addRoute(LostLinkDiscovered::class, ::lostLinkDiscovered)
+        addRoute(LoopLinkDiscovered::class, this::loopLinkDiscovered)
+        addRoute(RegularFileDiscovered::class, ::regularFileDiscovered)
+        addRoute(FreakDiscovered::class, ::freakDiscovered)
+        addRoute(DiscoveryEndEvent::class, ::discoveryEnded)
+        approve(MultiRequest::class)
     }
 
-    private fun discovered(event: FileDiscoveryEntryEvent) {
-        if (!killFileReader) {
-            val path = event.path
-            log.println("Discovered $path")
-            backServer.inject((
-                    if (path.isDirectory()) UpSyncDirRequest(this::class.asOrigin, hostname, group, path)
-                    else UpSyncRequest(this::class.asOrigin, hostname, group, path)
-                    ).onFailure {
-                    if (reason is FatalException) {
-                        killFileReader = true
-                        fileReader.stop(reason ?: RuntimeException("Unknown Reason"))
-                    }
-                }
-            )
-        }
+    private fun directoryDiscovered(request: DirectoryDiscovered) {
+        writer.createPhysicalDirectory(request)
     }
 
-    private fun end(event: FileDiscoveryEndEvent) {
-        trace("Received FileDiscoveryEndEvent.")
-        detail("Agent Pool Statistics: %s", backServer.writerPool.stats)
-        backServer.close()
+    private fun updateDirectory(request: DirectoryUpdate) {
+        writer.updateDirectory(request)
+    }
+
+    private fun symbolicLinkDiscovered(request: SymbolicLinkDiscovered) {
+        writer.createSymbolicLink(request)
+    }
+
+    private fun lostLinkDiscovered(request: LostLinkDiscovered) {
+        writer.createLostLink(request)
+    }
+
+    private fun loopLinkDiscovered(request: LoopLinkDiscovered) {
+        writer.createLoopLink(request)
+    }
+
+    private fun regularFileDiscovered(request: RegularFileDiscovered) {
+        writer.createRegularFile(request)
+    }
+
+    private fun freakDiscovered(request: FreakDiscovered) {
+        info(TEXT_FREAK_DISCOVERED, request.path, fileTypeOf(request.path))
+    }
+
+    private fun discoveryEnded(event: DiscoveryEndEvent) {
+        info(TEXT_DISCOVERY_ENDED)
+        writer.close()
+        IMMEX.standby()
+        ignore()
         exitProcess(0)
     }
 
-    private fun error(event: FileDiscoveryErrorEvent) {
-        trace("Received FileDiscoveryErrorEvent.")
-        if (event.problem != null) error(event.problem)
-    }
-
-    private fun afterDir(event: FileDiscoveryPostDirectoryEvent) {
-        if (!killFileReader) {
-            val path = event.directory
-            log.println("Fixing $path")
-            backServer.inject(UpSyncDirUpdateRequest(this::class.asOrigin, hostname, group, path))
+    fun execute() {
+        receive(
+            DiscoveryEvent::class,
+            DirectoryUpdateEvent::class,
+            DiscoveryEndEvent::class,
+            DiscoveryRequest::class,
+            MultiRequest::class
+        )
+        debug("Basedirs (%s): (%s)%s", baseDirs.classname, baseDirs[0].classname, baseDirs)
+        baseDirs.forEach { baseDir ->
+            BasicFileScanner(baseDir, filter).execute()
         }
     }
 
-    fun run() {
-        val recipe = backServer.inject(DownloadRecipeVoucher(this, hostname, group)).value
-        IMMEX.plugin(FileDiscoveryEvent::class, this)
-        IMMEX.plugin(FileDiscoveryEndEvent::class, this)
-        IMMEX.plugin(FileDiscoveryErrorEvent::class, this)
-        IMMEX.plugin(FileDiscoveryPostDirectoryEvent::class, this)
-        val count = fileReader.inject(StartDiscoveryVoucher(this, baseDir, recipe)).value
-        debug("%d files processed.", count)
+    companion object {
+        val IMMEX = CoraControl.IMMEX
+        val TEXT_FREAK_DISCOVERED = LocalText("FreakDiscovered2")
+        val TEXT_DISCOVERY_ENDED = LocalText("DiscoveryEnded")
+    }
+}
+
+fun main(vararg args: String) {
+    CoraModules.register(CoraConfImpl(), CoraComImpl(), CoraTextImpl(), CoraTypeImpl(), CoraControlImpl())
+    try {
+        UpSync(args.toList()).execute()
+    } catch (e: Exception) {
+        Syslog.error(e)
+        exitProcess(1)
     }
 }

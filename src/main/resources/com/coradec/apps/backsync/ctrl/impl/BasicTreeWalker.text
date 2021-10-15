@@ -1,2 +1,2 @@
 # Localized text base for default locale of class BasicTreeWalker
-AccessToDirDenied1: Access to directory «%s» denied! → Directory skipped.
+DirectoryWalkFailed1: Directory walk of «%s» failed!
