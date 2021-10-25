@@ -1,4 +1,5 @@
 # Localized text base for default locale of class UpSync
 FreakDiscovered1: Cannot upsync filesystem entry «%s» of type ‹%s›! → skipped.
+ExclusionDiscovered1: Entry «%s» is excluded. → skipped
 DiscoveryEnded: File discovery ended: closing receiver(s) and shutting down.
 ErrorWhileProcessingDirectory1: Error while processing directory «%s»!

@@ -13,11 +13,13 @@ Filter:
     - LOST_LINK
   prefix:
     - /backup
+    - /cdrom
     - /dev
     - /media
     - /mnt
     - /proc
     - /run
+    - /srv
     - /sys
     - /tmp
     - /var

@@ -38,6 +38,11 @@
         </dependency>
         <dependency>
             <groupId>com.coradec.coradeck</groupId>
+            <artifactId>module</artifactId>
+            <version>${coradeck.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.coradec.coradeck</groupId>
             <artifactId>core</artifactId>
             <version>${coradeck.version}</version>
         </dependency>

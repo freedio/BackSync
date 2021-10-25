@@ -1,15 +1,16 @@
 package com.coradec.apps.backsync.ctrl.impl
 
 import com.coradec.apps.backsync.com.DiscoveryEndEvent
+import com.coradec.apps.backsync.com.ExclusionDiscovered
 import com.coradec.apps.backsync.com.impl.*
 import com.coradec.apps.backsync.ctrl.FileScanner
 import com.coradec.apps.backsync.ctrl.Filter
 import com.coradec.coradeck.com.model.Notification
 import com.coradec.coradeck.com.model.Request
 import com.coradec.coradeck.com.model.impl.BasicCommand
-import com.coradec.coradeck.com.model.impl.DummyRequest
 import com.coradec.coradeck.com.model.unto
 import com.coradec.coradeck.core.model.Origin
+import com.coradec.coradeck.core.model.Priority.*
 import com.coradec.coradeck.core.util.here
 import com.coradec.coradeck.ctrl.ctrl.impl.BasicAgent
 import com.coradec.coradeck.ctrl.module.CoraControl
@@ -52,12 +53,10 @@ class BasicFileScanner(
                 )
             }
             if (dirInclude) entries += DirectoryUpdate(this, path)
-            Thread.sleep(100)
             CoraControl.createRequestList(this, entries)
         }
-        path.isSymbolicLink() -> if (filter.excludes(path)) DummyRequest(this) else {
+        path.isSymbolicLink() -> if (filter.excludes(path)) ExclusionDiscovered(this, B2, path) else {
             val linkTarget = path.resolve(path.readSymbolicLink())
-            Thread.sleep(10)
             when {
                 linkTarget.notExists() -> LostLinkDiscovered(this, path)
                 path.startsWith(linkTarget) -> LoopLinkDiscovered(this, path)
@@ -65,14 +64,11 @@ class BasicFileScanner(
             }
         }
         path.isRegularFile(NOFOLLOW_LINKS) ->
-            if (filter.excludes(path)) DummyRequest(this) else {
-                Thread.sleep(100)
-                RegularFileDiscovered(this, path)
-            }
-        else -> if (filter.excludes(path)) DummyRequest(this) else FreakDiscovered(this, path)
+            if (filter.excludes(path)) ExclusionDiscovered(this, path = path) else RegularFileDiscovered(this, path)
+        else -> if (filter.excludes(path)) ExclusionDiscovered(this, path= path) else FreakDiscovered(this, B0, path)
     }
 
-    inner class WalkCommand(origin: Origin, val path: Path) : BasicCommand(origin) {
+    inner class WalkCommand(origin: Origin, val path: Path) : BasicCommand(origin, B3) {
         override fun execute() {
             IMMEX.inject(walk(path) propagateTo this)
         }
